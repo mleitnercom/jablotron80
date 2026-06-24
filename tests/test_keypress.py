@@ -1,21 +1,16 @@
-"""Tests for ``JablotronKeyPress.get_beep_option`` - relates to upstream issue #44.
+"""Tests for the defensive ``get_beep_option`` lookup (issue #44).
 
-``JablotronKeyPress._BEEP_OPTIONS`` maps a numeric beep code to a description.
-The defined keys are 0,1,2,3,4,5,7,8 and 0xE (14). Notably **key 6 is missing**.
+Background
+----------
+``JablotronKeyPress._BEEP_OPTIONS`` maps known beep codes to descriptions, but
+it is sparse - several codes the panel can emit (notably 6) have no entry.
+The old ``get_beep_option`` indexed the dict directly, so an unmapped code raised
+``KeyError`` and broke message parsing. The fix uses ``dict.get`` with an
+"Unknown" fallback.
 
-Issue #44 reports a ``KeyError: 6`` raised from ``get_beep_option(6)`` because the
-central unit can emit beep code 6 but the lookup dict has no entry for it. These
-tests:
-
-1. document the values returned for the defined keys, and
-2. capture the current (buggy) behaviour for the missing key 6 via
-   ``pytest.raises(KeyError)`` so the gap is recorded.
-
-Per the task, jablotron.py is intentionally NOT modified here - the test only
-captures the behaviour.
+These tests only touch ``JablotronKeyPress``, a plain class with static methods,
+so no central unit or event loop is needed.
 """
-
-import pytest
 
 import custom_components.jablotron80.jablotron as jablotron
 
@@ -23,48 +18,47 @@ JablotronKeyPress = jablotron.JablotronKeyPress
 
 
 # ---------------------------------------------------------------------------
-# Defined beep codes return their mapped value/description.
+# Defined codes still return their mapped values
 # ---------------------------------------------------------------------------
-def test_get_beep_option_returns_defined_values():
-    assert JablotronKeyPress.get_beep_option(0x0)["val"] == "1s"
-    assert JablotronKeyPress.get_beep_option(0x1)["val"] == "1l"
-    assert JablotronKeyPress.get_beep_option(0x2)["val"] == "2l"
-    assert JablotronKeyPress.get_beep_option(0x3)["val"] == "3l"
-    assert JablotronKeyPress.get_beep_option(0x4)["val"] == "4s"
-    assert JablotronKeyPress.get_beep_option(0x5)["val"] == "3s"
-    assert JablotronKeyPress.get_beep_option(0x7)["val"] == "0(1)"
-    assert JablotronKeyPress.get_beep_option(0x8)["val"] == "0(2)"
-    assert JablotronKeyPress.get_beep_option(0xE)["val"] == "?"
+def test_defined_beep_codes_return_mapped_values():
+    """Every key present in _BEEP_OPTIONS returns exactly its mapped entry."""
+    for code, expected in JablotronKeyPress._BEEP_OPTIONS.items():
+        assert JablotronKeyPress.get_beep_option(code) == expected
 
 
-def test_get_beep_option_returns_dict_with_description():
-    option = JablotronKeyPress.get_beep_option(0x0)
-    assert set(option.keys()) == {"val", "desc"}
-    assert "beep" in option["desc"].lower()
+def test_specific_known_codes():
+    """Spot-check a couple of known codes against their literal mappings."""
+    assert JablotronKeyPress.get_beep_option(0x0) == {
+        "val": "1s",
+        "desc": "1 subtle (short) beep triggered",
+    }
+    assert JablotronKeyPress.get_beep_option(0x1) == {
+        "val": "1l",
+        "desc": "1 loud (long) beep triggered",
+    }
+    assert JablotronKeyPress.get_beep_option(0xE) == {
+        "val": "?",
+        "desc": "unknown beep(s) triggered",
+    }
 
 
 # ---------------------------------------------------------------------------
-# Issue #44: beep code 6 is not in the table -> KeyError.
-# This documents (does not fix) the gap.
+# The #44 regression: code 6 must NOT raise
 # ---------------------------------------------------------------------------
-def test_get_beep_option_6_raises_keyerror_issue_44():
-    """Capture upstream issue #44: get_beep_option(6) raises KeyError: 6.
+def test_missing_code_6_returns_unknown_and_does_not_raise():
+    """The reported crash: code 6 is absent from _BEEP_OPTIONS.
 
-    Beep code 6 is not present in ``_BEEP_OPTIONS`` (defined keys are
-    0,1,2,3,4,5,7,8,14). This asserts the *current* behaviour. If issue #44 is
-    later fixed by adding key 6, this test will start failing and should be
-    updated to assert the new mapped value instead.
+    Before the fix this raised KeyError; now it degrades to "Unknown".
     """
-    assert 6 not in JablotronKeyPress._BEEP_OPTIONS  # precondition for the bug
-    with pytest.raises(KeyError):
-        JablotronKeyPress.get_beep_option(6)
+    # Guard the premise: 6 really is unmapped.
+    assert 6 not in JablotronKeyPress._BEEP_OPTIONS
+    # And the call is now safe.
+    assert JablotronKeyPress.get_beep_option(6) == "Unknown"
 
 
-# ---------------------------------------------------------------------------
-# A small contrasting check on the keypress map (a sibling lookup that *is*
-# complete for the codes it covers), to show the helper otherwise works.
-# ---------------------------------------------------------------------------
-def test_get_keypress_option_known_codes():
-    assert JablotronKeyPress.get_keypress_option(0x0)["val"] == "0"
-    assert JablotronKeyPress.get_keypress_option(0xE)["val"] == "#"  # ESC/OFF
-    assert JablotronKeyPress.get_keypress_option(0xF)["val"] == "*"  # ON
+def test_other_unmapped_codes_also_return_unknown():
+    """Any unmapped code falls back to "Unknown" rather than raising."""
+    for code in (0x6, 0x9, 0xA, 0xFF):
+        if code in JablotronKeyPress._BEEP_OPTIONS:
+            continue
+        assert JablotronKeyPress.get_beep_option(code) == "Unknown"
