@@ -1451,9 +1451,11 @@ class JA80CentralUnit(object):
         self._query.type = "button"
 
         self._active_devices = {}
+        self._active_devices_tmp = {}
         self._active_codes = {}
         self._codes = {}
         self._device_query_pending = False
+        self._force_query = False
         self._last_state = None
         self._mode = None
 
@@ -1758,18 +1760,16 @@ class JA80CentralUnit(object):
             return object.zone
 
     def _clear_triggers(self) -> None:
-        for device in self._devices.values():
-            # if self.system_mode == JA80CentralUnit.SYSTEM_MODE_UNSPLIT:
-            #    device.deactivate()
-            # else:
+        # #153 fix (heifisch): deactivate only currently-active sources; the persistent
+        # _active_devices/_active_codes registries stay populated for reconciliation.
+        for device in self._active_devices.values():
             device.active = False
-        self._active_devices.clear()
-        for code in self._codes.values():
-            # if self.system_mode == JA80CentralUnit.SYSTEM_MODE_UNSPLIT:
-            #    device.deactivate()
-            # else:
+        for code in self._active_codes.values():
             code.active = False
-        self._active_codes.clear()
+        # #167 gating (async adaptation): everything cleared -> reset the query gates so the
+        # next trigger can query again even if a prior query's answer was lost.
+        self._device_query_pending = False
+        self._force_query = False
 
     def _clear_source(self, source_id: bytes) -> None:
         source = self._get_source(source_id)
@@ -1789,6 +1789,7 @@ class JA80CentralUnit(object):
         source = self._get_source(source_id)
         if isinstance(source, JablotronDevice):
             self._activate_device(source)
+            self._activate_device_tmp(source)
         elif isinstance(source, JablotronCode):
             self._activate_code(source)
         else:
@@ -1813,12 +1814,15 @@ class JA80CentralUnit(object):
                 zone.code_activated(source)
 
     def _update_device(self):
-        for device in self._devices.values():
-            if device.device_id in self._active_devices:
+        # #153 fix (heifisch): reconcile against the set found in the current query round.
+        # A device in the persistent set but absent from this round (i.e. it closed) is
+        # turned off independently of other still-open detectors.
+        for device in self._active_devices.values():
+            if device.device_id in self._active_devices_tmp:
                 device.active = True
             else:
                 device.active = False
-        self._active_devices.clear()
+        self._active_devices_tmp.clear()
 
     def _activate_device(self, source):
         if isinstance(source, JablotronDevice):
@@ -1827,6 +1831,13 @@ class JA80CentralUnit(object):
             zone = self._get_zone_via_object(source)
             if not zone is None:
                 zone.device_activated(source)
+
+    def _activate_device_tmp(self, source):
+        # #153 fix (heifisch): record the device in the current query round so
+        # _update_device() can deactivate devices that are no longer reported.
+        if isinstance(source, JablotronDevice):
+            source.active = True
+            self._active_devices_tmp[source.device_id] = source
 
     def _fault_source(self, source_id: bytes) -> None:
         source = self._get_source(source_id)
@@ -2011,7 +2022,11 @@ class JA80CentralUnit(object):
         self.central_device.last_event = log
 
     async def _send_device_query(self) -> None:
+        # #167 gating (async adaptation): keep exactly one detail query in flight.
+        # Cleared again in _confirm_device_query() once the panel answers. Prevents the
+        # per-packet query spam that blocked disarm, without dropping detail resolution.
         if not self._device_query_pending:
+            self._device_query_pending = True
             await self.send_detail_command()
 
     def _confirm_device_query(self) -> None:
@@ -2063,7 +2078,7 @@ class JA80CentralUnit(object):
             self.status = JA80CentralUnit.STATUS_NORMAL
             self._call_zones(function_name="disarm")
 
-            if activity == 0x00:  # and not self.led_alarm:
+            if activity == 0x00 and not self.led_alarm:
                 # clear active statuses
                 self._clear_triggers()
 
@@ -2190,8 +2205,9 @@ class JA80CentralUnit(object):
             # something is active
             if detail == 0x00:
                 # don't send query if we already have "triggered detector" displayed
-                if activity_name not in self.statustext.message or activity_name == self.statustext.message:
+                if activity_name not in self.statustext.message or activity_name == self.statustext.message or self._force_query:
                     await self._send_device_query()
+                    self._force_query = False
                 else:
                     log = False
             else:
@@ -2221,6 +2237,9 @@ class JA80CentralUnit(object):
             else:
                 self._activate_source(detail)
                 self._confirm_device_query()
+            # #153 fix (heifisch): force a re-query on the next single-detector report so
+            # the active set is re-enumerated and closed detectors get reconciled off.
+            self._force_query = True
 
         else:
             warn = True
