@@ -666,6 +666,10 @@ class JablotronConnection:
         self._connection = None
         self._messages = asyncio.Event()
         self.update_devices = False
+        # #153/#167 (heifisch): de-duplicate queued commands so repeated detail queries
+        # don't pile up behind each other and block disarm.
+        self._cmd_list = []
+        self._send_cmd = None
 
     def get_record(self) -> List[bytearray]:
         records = []
@@ -700,13 +704,21 @@ class JablotronConnection:
         return self._connection is not None
 
     async def add_command(self, command: JablotronCommand) -> None:
+        # #153/#167 (heifisch): skip if an identical command is already queued or in flight
+        if command in self._cmd_list or command == self._send_cmd:
+            return
         LOGGER.debug(f"Adding command {command}")
+        self._cmd_list.append(command)
         await self._cmd_q.put(command)
 
     async def _get_command(self) -> Union[JablotronCommand, None]:
         if self._cmd_q.empty():
             return None
-        return await self._cmd_q.get()
+        cmd = await self._cmd_q.get()
+        if self._cmd_list:
+            self._cmd_list.pop(0)
+        self._send_cmd = cmd  # mark in flight for de-duplication
+        return cmd
 
     async def _forward_records(self, records: List[bytearray]) -> None:
         await self._output_q.put(records)
@@ -749,7 +761,9 @@ class JablotronConnection:
                 if send_cmd is not None:
                     accepted = False
                     confirmed = False
-                    retries = 2
+                    # #153 (heifisch): more attempts so the detail query gets acked on flaky
+                    # comms; reconciliation only runs once a "Details" command is confirmed.
+                    retries = 10
 
                     while retries >= 0 and not (accepted and confirmed):
                         level = logging.INFO
@@ -795,6 +809,7 @@ class JablotronConnection:
                         retries -= 1
 
                     self._cmd_q.task_done()
+                    self._send_cmd = None
 
             except Exception:
                 LOGGER.exception("Unexpected error in packet loop")
@@ -1766,10 +1781,6 @@ class JA80CentralUnit(object):
             device.active = False
         for code in self._active_codes.values():
             code.active = False
-        # #167 gating (async adaptation): everything cleared -> reset the query gates so the
-        # next trigger can query again even if a prior query's answer was lost.
-        self._device_query_pending = False
-        self._force_query = False
 
     def _clear_source(self, source_id: bytes) -> None:
         source = self._get_source(source_id)
@@ -2022,11 +2033,7 @@ class JA80CentralUnit(object):
         self.central_device.last_event = log
 
     async def _send_device_query(self) -> None:
-        # #167 gating (async adaptation): keep exactly one detail query in flight.
-        # Cleared again in _confirm_device_query() once the panel answers. Prevents the
-        # per-packet query spam that blocked disarm, without dropping detail resolution.
         if not self._device_query_pending:
-            self._device_query_pending = True
             await self.send_detail_command()
 
     def _confirm_device_query(self) -> None:
