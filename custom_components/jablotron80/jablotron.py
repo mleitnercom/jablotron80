@@ -1579,6 +1579,10 @@ class JA80CentralUnit(object):
         self._device_last_active_wall = {}
         self._active_codes = {}
         self._codes = {}
+        # #83: code_id -> wall-clock datetime the code was last used (arm/disarm).
+        # Surfaced as a `last_used` attribute on the code entities; the existing
+        # active/inactive state is unchanged (non-breaking).
+        self._code_last_used_wall = {}
         self._device_query_pending = False
         self._force_query = False
         self._last_state = None
@@ -1981,6 +1985,8 @@ class JA80CentralUnit(object):
         if isinstance(source, JablotronCode):
             self._active_codes[source._id] = source
             source.active = True
+            # #83: record when this code was last used (arm/disarm).
+            self._code_last_used_wall[source._id] = datetime.datetime.now(datetime.timezone.utc)
             zone = self._get_zone_via_object(source)
             if not zone is None:
                 zone.code_activated(source)
