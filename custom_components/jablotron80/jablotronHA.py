@@ -90,17 +90,21 @@ class JablotronEntity(Entity):
                 if not value is None:
                     attr[field.replace("_", " ")] = getattr(self._object, field)
         # #153 follow-up: surface when the panel last reported this detector as
-        # active, so the staleness behaviour is observable. `last_reported_active`
-        # is a wall-clock timestamp; `seconds_since_reported` is its age and climbs
-        # until the sweep clears a detector the panel stopped mentioning.
+        # active, so the staleness behaviour is observable.
         if isinstance(self._object, JablotronDevice):
             device_id = self._object.device_id
-            last_mono = self._cu._device_last_active.get(device_id)
-            if last_mono is not None:
-                attr["seconds_since_reported"] = round(time.monotonic() - last_mono)
+            # `last_reported_active` is a stable wall-clock timestamp ("last active
+            # at ..."); it stays visible even once the detector closes.
             last_wall = self._cu._device_last_active_wall.get(device_id)
             if last_wall is not None:
                 attr["last_reported_active"] = last_wall
+            # `seconds_since_reported` is a liveness metric: it only makes sense
+            # while the detector is active (it climbs until the sweep clears a
+            # stuck detector). On a closed detector it would freeze at a stale
+            # value, so we omit it entirely when inactive.
+            last_mono = self._cu._device_last_active.get(device_id)
+            if last_mono is not None and self._object.active:
+                attr["seconds_since_reported"] = round(time.monotonic() - last_mono)
         return attr
 
     @property

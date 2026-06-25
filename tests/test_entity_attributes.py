@@ -78,3 +78,23 @@ def test_device_without_record_omits_timestamp_attributes(event_loop_for_setters
 
     assert "seconds_since_reported" not in attr
     assert "last_reported_active" not in attr
+
+
+def test_closed_detector_keeps_timestamp_hides_age(event_loop_for_setters):
+    """A closed (inactive) detector keeps last_reported_active but drops the age.
+
+    `seconds_since_reported` is a liveness metric. Once the detector closes it
+    would otherwise freeze at a stale value, so it is omitted while inactive;
+    the stable `last_reported_active` timestamp remains visible.
+    """
+    unit = _build_unit()
+    unit._activate_source(DEVICE_ID)
+    device = unit.get_device(DEVICE_ID)
+
+    # Simulate the close: the detector goes inactive, timestamps are retained.
+    device.active = False
+
+    attr = JablotronEntity(unit, device).extra_state_attributes
+
+    assert "last_reported_active" in attr
+    assert "seconds_since_reported" not in attr
