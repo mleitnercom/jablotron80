@@ -2001,11 +2001,29 @@ class JA80CentralUnit(object):
                 deactivated.append(device)
         return deactivated
 
+    def _active_tracked_devices(self) -> list:
+        # #153 follow-up: active detectors that carry a last-active timestamp.
+        # The sweep loop republishes these every tick so their live attributes
+        # (seconds_since_reported / last_reported_active) refresh in the UI -
+        # which otherwise only happens when the device's own state changes.
+        return [
+            device
+            for device in self._active_devices.values()
+            if device.active is True and device.device_id in self._device_last_active
+        ]
+
     async def _stale_device_sweep_loop(self) -> None:
-        # #153 follow-up: periodically run the ack-independent staleness sweep.
+        # #153 follow-up: periodically run the ack-independent staleness sweep,
+        # then republish still-active detectors so their staleness attributes
+        # tick live (HA re-reads attributes only when an entity writes state).
         while not self._stop.is_set():
             await asyncio.sleep(STALE_SWEEP_INTERVAL_SECONDS)
             for device in self._sweep_stale_devices():
+                try:
+                    await device.publish_updates()
+                except Exception:
+                    pass
+            for device in self._active_tracked_devices():
                 try:
                     await device.publish_updates()
                 except Exception:

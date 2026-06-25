@@ -158,3 +158,30 @@ def test_sweep_does_not_deactivate_fresh_or_untracked(event_loop_for_setters):
     assert deactivated == []
     assert dev6.active is True
     assert dev22.active is True
+
+
+def test_active_tracked_devices_lists_active_with_timestamp(event_loop_for_setters):
+    """Variant B: only active detectors carrying a timestamp are republished.
+
+    The sweep loop republishes this set every tick so the live staleness
+    attributes refresh in the UI. A deactivated device, or one without a
+    recorded timestamp, must drop out of the set.
+    """
+    unit = _build_unit()
+
+    unit._activate_source(DEVICE_GOES_STALE)
+    unit._activate_source(DEVICE_STAYS_FRESH)
+
+    dev6 = unit.get_device(DEVICE_GOES_STALE)
+    dev22 = unit.get_device(DEVICE_STAYS_FRESH)
+
+    # Both active and timestamped -> both refreshed, in activation order.
+    assert unit._active_tracked_devices() == [dev6, dev22]
+
+    # A deactivated detector drops out (no point refreshing an off entity).
+    dev22.active = False
+    assert unit._active_tracked_devices() == [dev6]
+
+    # An active detector without a recorded timestamp also drops out.
+    del unit._device_last_active[DEVICE_GOES_STALE]
+    assert unit._active_tracked_devices() == []
