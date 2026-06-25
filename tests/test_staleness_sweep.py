@@ -19,6 +19,7 @@ Each device id used here is ``< 0x40`` so that ``_get_source`` resolves it to a
 ``JablotronDevice`` (ids >= 0x40 are codes, see ``JA80CentralUnit._get_source``).
 """
 
+import datetime
 import time
 
 import custom_components.jablotron80.jablotron as jablotron
@@ -75,6 +76,28 @@ def test_activate_records_last_active(event_loop_for_setters):
     assert DEVICE_GOES_STALE in unit._device_last_active
     ts = unit._device_last_active[DEVICE_GOES_STALE]
     assert before <= ts <= after
+
+
+def test_activate_records_wall_clock_timestamp(event_loop_for_setters):
+    """Activation also records a tz-aware wall-clock datetime for the attribute.
+
+    The monotonic dict drives the sweep; this parallel dict is what the entity
+    surfaces as ``last_reported_active``. It must be a timezone-aware datetime
+    (Home Assistant requires aware datetimes in attributes) and sit within a few
+    seconds of "now".
+    """
+    unit = _build_unit()
+
+    before = datetime.datetime.now(datetime.timezone.utc)
+    unit._activate_source(DEVICE_GOES_STALE)
+    after = datetime.datetime.now(datetime.timezone.utc)
+
+    assert DEVICE_GOES_STALE in unit._device_last_active_wall
+    wall = unit._device_last_active_wall[DEVICE_GOES_STALE]
+    assert isinstance(wall, datetime.datetime)
+    # Timezone-aware (not naive) so HA serialises/localises it correctly.
+    assert wall.tzinfo is not None
+    assert before <= wall <= after
 
 
 def test_sweep_deactivates_only_the_stale_device(event_loop_for_setters):

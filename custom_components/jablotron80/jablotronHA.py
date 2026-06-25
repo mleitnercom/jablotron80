@@ -1,3 +1,4 @@
+import time
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.typing import StateType
 from typing import Any, Dict, List, Optional, Union
@@ -88,6 +89,18 @@ class JablotronEntity(Entity):
                 value = getattr(self._object, field)
                 if not value is None:
                     attr[field.replace("_", " ")] = getattr(self._object, field)
+        # #153 follow-up: surface when the panel last reported this detector as
+        # active, so the staleness behaviour is observable. `last_reported_active`
+        # is a wall-clock timestamp; `seconds_since_reported` is its age and climbs
+        # until the sweep clears a detector the panel stopped mentioning.
+        if isinstance(self._object, JablotronDevice):
+            device_id = self._object.device_id
+            last_mono = self._cu._device_last_active.get(device_id)
+            if last_mono is not None:
+                attr["seconds_since_reported"] = round(time.monotonic() - last_mono)
+            last_wall = self._cu._device_last_active_wall.get(device_id)
+            if last_wall is not None:
+                attr["last_reported_active"] = last_wall
         return attr
 
     @property

@@ -1536,6 +1536,10 @@ class JA80CentralUnit(object):
         # #153 follow-up: device_id -> time.monotonic() of last active report,
         # drives the ack-independent staleness sweep.
         self._device_last_active = {}
+        # #153 follow-up: device_id -> wall-clock datetime of last active report,
+        # surfaced as a diagnostic entity attribute (the monotonic dict above is
+        # immune to clock changes and stays the source of truth for the sweep).
+        self._device_last_active_wall = {}
         self._active_codes = {}
         self._codes = {}
         self._device_query_pending = False
@@ -1962,6 +1966,7 @@ class JA80CentralUnit(object):
             # #153 follow-up: record when this device was last reported active so
             # the staleness sweep can deactivate it if the panel stops reporting it.
             self._device_last_active[source.device_id] = time.monotonic()
+            self._device_last_active_wall[source.device_id] = datetime.datetime.now(datetime.timezone.utc)
             zone = self._get_zone_via_object(source)
             if not zone is None:
                 zone.device_activated(source)
