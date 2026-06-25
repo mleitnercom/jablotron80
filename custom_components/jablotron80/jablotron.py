@@ -1198,6 +1198,33 @@ class JablotronMessage:
         return True
 
     @staticmethod
+    def perexg_checksum(msg: bytes) -> int:
+        # #152 shadow (TEMP): perexg's single-algorithm checksum, reverse-engineered
+        # from the original Jablotron O-Link software. A valid frame, taken as
+        # data + crc byte with the trailing 0xFF stripped, yields 0.
+        s = 0x7F
+        for byte in msg:
+            b = byte
+            for _ in range(8):
+                s = (s << 1) & 0xFF
+                if b & 0x80:
+                    s += 1
+                if s & 0x80:
+                    s ^= 0xA3
+                b = (b << 1) & 0xFF
+        return s
+
+    @staticmethod
+    def perexg_crc_ok(packet: bytes) -> bool:
+        # #152 shadow (TEMP): perexg's verdict for the same packet check_crc() sees.
+        length = len(packet)
+        if length <= 2:
+            return True
+        if packet[length - 1] != 0xFF:
+            return True
+        return JablotronMessage.perexg_checksum(packet[: length - 1]) == 0
+
+    @staticmethod
     def get_message_type_from_record(record, packet_data: bytes) -> str:
         message_type = None
         try:
@@ -1218,7 +1245,17 @@ class JablotronMessage:
                 f"Unknown message type {hex(record[0])} with data {packet_data} received",
             )
         else:
-            if not JablotronMessage.check_crc(record):
+            current_ok = JablotronMessage.check_crc(record)
+            # #152 shadow (TEMP): run perexg's checksum in parallel, log ONLY when
+            # the two verdicts diverge. Behaviour is unchanged - current_ok still
+            # decides. Remove this block + the perexg_* helpers after the window.
+            perexg_ok = JablotronMessage.perexg_crc_ok(record)
+            if current_ok != perexg_ok:
+                LOGGER.warning(
+                    f"CRC SHADOW DIVERGENCE: frame={packet_data} "
+                    f"current={'ok' if current_ok else 'reject'} perexg={'ok' if perexg_ok else 'reject'}"
+                )
+            if not current_ok:
                 LOGGER.log(expected_warning_level, f"Invalid CRC for {packet_data}")
             elif JablotronMessage.validate_length(message_type, record):
                 LOGGER.debug(f"Message of type {message_type} received {packet_data}")
