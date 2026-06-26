@@ -2450,6 +2450,18 @@ class JA80CentralUnit(object):
                     self._force_query = False
                 else:
                     log = False
+                    # #208 follow-up: the panel still reports a detector triggered,
+                    # but we suppress the keypad query (it is already shown). Refresh
+                    # the known active detectors' last-seen time so the staleness
+                    # sweep does not falsely clear a still-open single detector
+                    # (no query, no keypad spam). On close the panel stops reporting
+                    # "triggered", the timestamp goes stale, and the sweep clears it.
+                    refresh_mono = time.monotonic()
+                    refresh_wall = datetime.datetime.now(datetime.timezone.utc)
+                    for active_device in self._active_devices.values():
+                        if active_device.active is True:
+                            self._device_last_active[active_device.device_id] = refresh_mono
+                            self._device_last_active_wall[active_device.device_id] = refresh_wall
             else:
                 self._activate_source(detail)
                 self._confirm_device_query()
