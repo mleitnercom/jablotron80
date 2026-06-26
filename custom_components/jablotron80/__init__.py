@@ -52,7 +52,7 @@ def _setup_file_logging(hass: HomeAssistant) -> None:
     warn_h.setLevel(logging.WARNING)
     warn_h.setFormatter(fmt)
     debug_h = logging.handlers.RotatingFileHandler(
-        hass.config.path("jablotron80.debug.log"), maxBytes=500 * 1024 * 1024, backupCount=5
+        hass.config.path("jablotron80.debug.log"), maxBytes=2 * 1024 * 1024 * 1024, backupCount=4
     )
     debug_h.setLevel(logging.DEBUG)
     debug_h.setFormatter(fmt)
