@@ -107,3 +107,34 @@ def test_unused_code_has_no_last_used(event_loop_for_setters):
 
     attr = JablotronEntity(unit, code).extra_state_attributes
     assert "last_used" not in attr
+
+
+def test_code_use_fires_logbook_event(event_loop_for_setters):
+    """Using a code fires a single jablotron_code_used event for the logbook.
+
+    The event carries the code name and unique_id (logbook.py resolves the latter
+    to the code entity). It fires only on the off->on transition, so one entry
+    per use - a second activation while still active fires nothing more.
+    """
+    fired = []
+
+    class _Bus:
+        def async_fire(self, event_type, data):
+            fired.append((event_type, data))
+
+    unit = _build_unit()
+    unit._hass = type("_Hass", (), {"bus": _Bus()})()
+
+    code = unit.get_code(CODE_ID)
+    unit._activate_code_object(code)
+
+    assert len(fired) == 1
+    event_type, data = fired[0]
+    assert event_type == jablotron.EVENT_CODE_USED
+    assert data["code_id"] == CODE_ID
+    assert data["name"] == code.name
+    assert "unique_id" in data and str(CODE_ID) in data["unique_id"]
+
+    # Still active -> a second activation does not fire another entry.
+    unit._activate_code_object(code)
+    assert len(fired) == 1

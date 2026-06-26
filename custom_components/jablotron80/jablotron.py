@@ -70,6 +70,8 @@ else:
         CONFIGURATION_CENTRAL_SETTINGS,
         DEVICE_CONFIGURATION_REQUIRE_CODE_TO_ARM,
         DEVICE_CONFIGURATION_SYSTEM_MODE,
+        DOMAIN,
+        EVENT_CODE_USED,
     )
 
 
@@ -1983,10 +1985,23 @@ class JA80CentralUnit(object):
     def _activate_code_object(self, source):
         # is there need to trigger state for code?
         if isinstance(source, JablotronCode):
+            was_active = source.active
             self._active_codes[source._id] = source
             source.active = True
             # #83: record when this code was last used (arm/disarm).
             self._code_last_used_wall[source._id] = datetime.datetime.now(datetime.timezone.utc)
+            # #83/#98 follow-up: fire a logbook event on each fresh code use so every
+            # code gets its own usage history (logbook.py describes it and links it to
+            # the code entity). Only on the off->on transition = one entry per use.
+            if not was_active and self._hass is not None:
+                self._hass.bus.async_fire(
+                    EVENT_CODE_USED,
+                    {
+                        "code_id": source._id,
+                        "name": source.name,
+                        "unique_id": f"{DOMAIN}.{self.serial_port}.{source.id_part}.{source._id}",
+                    },
+                )
             zone = self._get_zone_via_object(source)
             if not zone is None:
                 zone.code_activated(source)
