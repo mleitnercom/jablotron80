@@ -1,4 +1,7 @@
 import asyncio
+import logging
+import logging.handlers
+import queue
 from homeassistant.components.alarm_control_panel import (
     DOMAIN as PLATFORM_ALARM_CONTROL_PANEL,
 )
@@ -32,11 +35,42 @@ PLATFORMS = [
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
+# diagnostic: mirror jablotron logs to dedicated files on /config, since the
+# HAOS journal is small (only a few minutes at DEBUG). File 1 (WARNING) is a
+# long-lived store (CRC-shadow / errors), immune to the DEBUG level; file 2
+# (DEBUG) is a large verbose store that only fills while DEBUG is enabled.
+# Writes go through a background QueueListener so the event loop never blocks on
+# disk I/O. Live-system diagnostic - not part of the upstream feature set.
+def _setup_file_logging(hass: HomeAssistant) -> None:
+    logger = logging.getLogger(__package__)
+    if any(getattr(h, "_jablotron_file", False) for h in logger.handlers):
+        return
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    warn_h = logging.handlers.RotatingFileHandler(
+        hass.config.path("jablotron80.log"), maxBytes=50 * 1024 * 1024, backupCount=3
+    )
+    warn_h.setLevel(logging.WARNING)
+    warn_h.setFormatter(fmt)
+    debug_h = logging.handlers.RotatingFileHandler(
+        hass.config.path("jablotron80.debug.log"), maxBytes=500 * 1024 * 1024, backupCount=5
+    )
+    debug_h.setLevel(logging.DEBUG)
+    debug_h.setFormatter(fmt)
+    log_queue = queue.SimpleQueue()
+    queue_handler = logging.handlers.QueueHandler(log_queue)
+    queue_handler.setLevel(logging.DEBUG)
+    queue_handler._jablotron_file = True
+    listener = logging.handlers.QueueListener(log_queue, warn_h, debug_h, respect_handler_level=True)
+    listener.start()
+    logger.addHandler(queue_handler)
+
+
 async def async_setup(hass: HomeAssistant, config: dict):
     # Ensure our name space for storing objects is a known type. A dict is
     # common/preferred as it allows a separate instance of your class for each
     # instance that has been created in the UI.
     hass.data.setdefault(DOMAIN, {})
+    await hass.async_add_executor_job(_setup_file_logging, hass)
 
     return True
 
