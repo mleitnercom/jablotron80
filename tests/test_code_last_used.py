@@ -138,3 +138,56 @@ def test_code_use_fires_logbook_event(event_loop_for_setters):
     # Still active -> a second activation does not fire another entry.
     unit._activate_code_object(code)
     assert len(fired) == 1
+
+
+def test_disarm_records_code_use_fires_event(event_loop_for_setters):
+    """Disarm (the _record_code_use path) records the use and fires one event.
+
+    The disarm handlers (0x09 Unsetting / 0x4E alarm cancelled) call
+    _record_code_use directly - on disarm the code is never activated, so this is
+    the only place the per-code logbook entry can originate. ``_record_code_use``
+    takes the raw panel source byte (code id 1 = 0x41 = 65).
+    """
+    fired = []
+
+    class _Bus:
+        def async_fire(self, event_type, data):
+            fired.append((event_type, data))
+
+    unit = _build_unit()
+    unit._hass = type("_Hass", (), {"bus": _Bus()})()
+
+    code = unit.get_code(CODE_ID)
+    before = datetime.datetime.now(datetime.timezone.utc)
+    unit._record_code_use(CODE_ID + 64)  # raw source byte for code id 1
+    after = datetime.datetime.now(datetime.timezone.utc)
+
+    assert len(fired) == 1
+    event_type, data = fired[0]
+    assert event_type == jablotron.EVENT_CODE_USED
+    assert data["code_id"] == CODE_ID
+    assert data["name"] == code.name
+    assert "unique_id" in data and str(CODE_ID) in data["unique_id"]
+
+    # the use is recorded for last_used; the code stays inactive (disarm clears it).
+    assert CODE_ID in unit._code_last_used_wall
+    ts = unit._code_last_used_wall[CODE_ID]
+    assert before <= ts <= after
+    assert code.active is False
+
+
+def test_record_code_use_ignores_non_code(event_loop_for_setters):
+    """A device source (id < 0x40) is not a code use - no event, no timestamp."""
+    fired = []
+
+    class _Bus:
+        def async_fire(self, event_type, data):
+            fired.append((event_type, data))
+
+    unit = _build_unit()
+    unit._hass = type("_Hass", (), {"bus": _Bus()})()
+
+    unit._record_code_use(5)  # device id, not a code
+
+    assert fired == []
+    assert unit._code_last_used_wall == {}

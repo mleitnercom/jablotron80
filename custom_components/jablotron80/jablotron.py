@@ -1994,17 +1994,38 @@ class JA80CentralUnit(object):
             # code gets its own usage history (logbook.py describes it and links it to
             # the code entity). Only on the off->on transition = one entry per use.
             if not was_active and self._hass is not None:
-                self._hass.bus.async_fire(
-                    EVENT_CODE_USED,
-                    {
-                        "code_id": source._id,
-                        "name": source.name,
-                        "unique_id": f"{DOMAIN}.{self.serial_port}.{source.id_part}.{source._id}",
-                    },
-                )
+                self._fire_code_used_event(source)
             zone = self._get_zone_via_object(source)
             if not zone is None:
                 zone.code_activated(source)
+
+    def _fire_code_used_event(self, source) -> None:
+        # #83/#98: emit one logbook event per code use; logbook.py renders it and links
+        # it to the code entity via unique_id. Callers guard that self._hass is not None.
+        self._hass.bus.async_fire(
+            EVENT_CODE_USED,
+            {
+                "code_id": source._id,
+                "name": source.name,
+                "unique_id": f"{DOMAIN}.{self.serial_port}.{source.id_part}.{source._id}",
+            },
+        )
+
+    def _record_code_use(self, code_id) -> None:
+        # #83/#98 follow-up: arming routes through _activate_code -> _activate_code_object,
+        # which records the use and fires the logbook event. Disarming (Unsetting / alarm
+        # cancelled by user) only clears the code via _clear_code, so the use was never
+        # recorded and no entry ever appeared. Record it here, without marking the code
+        # active (the disarm clears it).
+        code = self._get_source(code_id)
+        if not isinstance(code, JablotronCode):
+            return
+        self._code_last_used_wall[code._id] = datetime.datetime.now(datetime.timezone.utc)
+        if self._hass is not None:
+            self._fire_code_used_event(code)
+            # disarm does not toggle code.active, so no @log_change render fires here;
+            # trigger one explicitly so the code entity's last_used attribute updates.
+            asyncio.get_event_loop().create_task(code.publish_updates())
 
     def _update_device(self):
         # #153 fix (heifisch): reconcile against the set found in the current query round.
@@ -2167,6 +2188,9 @@ class JA80CentralUnit(object):
             event_name = "Unsetting"
             # unsetting, source = by which code
             self._clear_code(source)
+            # #83/#98 follow-up: disarm attributes the code but never activates it, so
+            # record the code use here for the per-code usage logbook.
+            self._record_code_use(source)
             self._call_zones(function_name="disarm", source_id=source)
         elif event_type == 0x0C:
             event_name = "Completely set without code"
@@ -2227,6 +2251,8 @@ class JA80CentralUnit(object):
             # alarm cancelled / disarmed, source = by which code
             self._clear_triggers()
             # code is specific to zone or master TODO
+            # #83/#98 follow-up: record the cancelling code for the per-code logbook.
+            self._record_code_use(source)
             self._call_zones(function_name="disarm", source_id=source)
         elif event_type == 0x50:
             # received when all tamper alarms are removed (though alarm warnings may be present via status messages)
