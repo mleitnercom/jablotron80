@@ -1247,15 +1247,17 @@ class JablotronMessage:
                 f"Unknown message type {hex(record[0])} with data {packet_data} received",
             )
         else:
-            current_ok = JablotronMessage.check_crc(record)
-            # #152 shadow (TEMP): run perexg's checksum in parallel, log ONLY when
-            # the two verdicts diverge. Behaviour is unchanged - current_ok still
-            # decides. Remove this block + the perexg_* helpers after the window.
-            perexg_ok = JablotronMessage.perexg_crc_ok(record)
-            if current_ok != perexg_ok:
+            # #152 flip (TEMP): perexg's single-algorithm checksum is now the LIVE
+            # verdict; the original check_crc() runs as the shadow. Validated
+            # equivalent over a long live window (0 divergences). Letting perexg
+            # actually drive the decision proves it in the live path; we still log
+            # any divergence before dropping check_crc and submitting the PR.
+            current_ok = JablotronMessage.perexg_crc_ok(record)
+            legacy_ok = JablotronMessage.check_crc(record)
+            if current_ok != legacy_ok:
                 LOGGER.warning(
                     f"CRC SHADOW DIVERGENCE: frame={packet_data} "
-                    f"current={'ok' if current_ok else 'reject'} perexg={'ok' if perexg_ok else 'reject'}"
+                    f"perexg={'ok' if current_ok else 'reject'} check_crc={'ok' if legacy_ok else 'reject'}"
                 )
             if not current_ok:
                 LOGGER.log(expected_warning_level, f"Invalid CRC for {packet_data}")
