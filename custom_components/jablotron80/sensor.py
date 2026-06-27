@@ -15,6 +15,7 @@ from .const import DATA_JABLOTRON, DOMAIN
 from homeassistant.components.sensor import SensorDeviceClass
 
 import logging
+import datetime
 
 LOGGER = logging.getLogger(__package__)
 
@@ -24,6 +25,9 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     async_add_entities([JablotronZoneSensorEntity(zone, cu) for zone in cu.zones], True)
     async_add_entities([JablotronSignalEntity(cu.rf_level, cu)], True)
     async_add_entities([JablotronSensorEntity(cu.alert, cu)], True)
+    # #151 read-only: the panel's own clock + its drift vs HA time (event-driven).
+    async_add_entities([JablotronPanelClockEntity(cu.panel_time, cu)], True)
+    async_add_entities([JablotronPanelDriftEntity(cu.panel_time_drift, cu)], True)
 
 
 class JablotronZoneSensorEntity(JablotronEntity):
@@ -73,3 +77,26 @@ class JablotronSignalEntity(JablotronSensorEntity):
     @property
     def device_class(self) -> str:
         return SensorDeviceClass.SIGNAL_STRENGTH
+
+
+class JablotronPanelClockEntity(JablotronSensorEntity):
+    # #151 read-only: the panel's own clock as a timestamp sensor. None until the
+    # first event provides a reading; minute resolution, year assumed by the
+    # integration.
+    @property
+    def state(self):
+        value = self._object.value
+        return value if isinstance(value, datetime.datetime) else None
+
+    @property
+    def device_class(self) -> str:
+        return SensorDeviceClass.TIMESTAMP
+
+
+class JablotronPanelDriftEntity(JablotronSensorEntity):
+    # #151 read-only: drift of the panel clock vs HA time at the last event, in
+    # whole seconds (signed: positive = panel ahead). Plain numeric, no device
+    # class - a drift can be negative, unlike a duration.
+    @property
+    def unit_of_measurement(self) -> str:
+        return "s"
