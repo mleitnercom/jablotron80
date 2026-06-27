@@ -134,6 +134,8 @@ def test_code_use_fires_logbook_event(event_loop_for_setters):
     assert data["code_id"] == CODE_ID
     assert data["name"] == code.name
     assert "unique_id" in data and str(CODE_ID) in data["unique_id"]
+    # entity_id is carried so HA links the recorded event to the code entity.
+    assert "entity_id" in data
 
     # Still active -> a second activation does not fire another entry.
     unit._activate_code_object(code)
@@ -168,6 +170,8 @@ def test_disarm_records_code_use_fires_event(event_loop_for_setters):
     assert data["code_id"] == CODE_ID
     assert data["name"] == code.name
     assert "unique_id" in data and str(CODE_ID) in data["unique_id"]
+    # entity_id is carried so HA links the recorded event to the code entity.
+    assert "entity_id" in data
 
     # the use is recorded for last_used; the code stays inactive (disarm clears it).
     assert CODE_ID in unit._code_last_used_wall

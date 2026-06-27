@@ -24,12 +24,14 @@ def async_describe_events(hass: HomeAssistant, async_describe_event) -> None:
     @callback
     def async_describe_code_used(event):
         data = event.data
-        entity_id = None
-        unique_id = data.get("unique_id")
-        if unique_id:
-            # The code is exposed as a binary_sensor; resolve its entity so the
-            # entry shows in that code's activity, not just the global logbook.
-            entity_id = er.async_get(hass).async_get_entity_id("binary_sensor", DOMAIN, unique_id)
+        # Prefer the entity_id carried on the event: the integration sets it so HA
+        # links the recorded event to the code's binary_sensor (the entity-scoped
+        # "Activity" filters on it). Fall back to resolving it from the unique_id.
+        entity_id = data.get("entity_id")
+        if not entity_id:
+            unique_id = data.get("unique_id")
+            if unique_id:
+                entity_id = er.async_get(hass).async_get_entity_id("binary_sensor", DOMAIN, unique_id)
         return {
             LOGBOOK_ENTRY_NAME: data.get("name") or "Code",
             LOGBOOK_ENTRY_MESSAGE: "was used",

@@ -2000,14 +2000,27 @@ class JA80CentralUnit(object):
                 zone.code_activated(source)
 
     def _fire_code_used_event(self, source) -> None:
-        # #83/#98: emit one logbook event per code use; logbook.py renders it and links
-        # it to the code entity via unique_id. Callers guard that self._hass is not None.
+        # #83/#98: emit one logbook event per code use; logbook.py renders it.
+        # Callers guard that self._hass is not None.
+        unique_id = f"{DOMAIN}.{self.serial_port}.{source.id_part}.{source._id}"
+        # #83/#98 follow-up: include the resolved entity_id. HA associates a recorded
+        # event with an entity via event.data["entity_id"], and the entity-scoped
+        # logbook (the code's own "Activity") filters on that. Without it the entry
+        # shows only in the GLOBAL logbook, not on the code entity itself.
+        entity_id = None
+        try:
+            from homeassistant.helpers import entity_registry as er
+
+            entity_id = er.async_get(self._hass).async_get_entity_id("binary_sensor", DOMAIN, unique_id)
+        except Exception:
+            entity_id = None
         self._hass.bus.async_fire(
             EVENT_CODE_USED,
             {
                 "code_id": source._id,
                 "name": source.name,
-                "unique_id": f"{DOMAIN}.{self.serial_port}.{source.id_part}.{source._id}",
+                "unique_id": unique_id,
+                "entity_id": entity_id,
             },
         )
 
