@@ -2027,16 +2027,16 @@ class JA80CentralUnit(object):
         else:
             LOGGER.warning(f"Unknown source type {source_id}")
 
-    def _activate_code(self, code_id):
+    def _activate_code(self, code_id, action=None):
         code = self._get_source(code_id)
-        self._activate_code_object(code)
+        self._activate_code_object(code, action)
 
     def _clear_code(self, code_id):
         code = self._get_source(code_id)
         if isinstance(code, JablotronCode):
             code.active = False
 
-    def _activate_code_object(self, source):
+    def _activate_code_object(self, source, action=None):
         # is there need to trigger state for code?
         if isinstance(source, JablotronCode):
             was_active = source.active
@@ -2048,14 +2048,16 @@ class JA80CentralUnit(object):
             # code gets its own usage history (logbook.py describes it and links it to
             # the code entity). Only on the off->on transition = one entry per use.
             if not was_active and self._hass is not None:
-                self._fire_code_used_event(source)
+                self._fire_code_used_event(source, action)
             zone = self._get_zone_via_object(source)
             if not zone is None:
                 zone.code_activated(source)
 
-    def _fire_code_used_event(self, source) -> None:
+    def _fire_code_used_event(self, source, action=None) -> None:
         # #83/#98: emit one logbook event per code use; logbook.py renders it.
-        # Callers guard that self._hass is not None.
+        # Callers guard that self._hass is not None. `action` ("arm"/"disarm") lets the
+        # describer say "was used to arm/disarm"; None (e.g. panic/tamper code use)
+        # renders as plain "was used".
         unique_id = f"{DOMAIN}.{self.serial_port}.{source.id_part}.{source._id}"
         # #83/#98 follow-up: include the resolved entity_id. HA associates a recorded
         # event with an entity via event.data["entity_id"], and the entity-scoped
@@ -2075,10 +2077,11 @@ class JA80CentralUnit(object):
                 "name": source.name,
                 "unique_id": unique_id,
                 "entity_id": entity_id,
+                "action": action,
             },
         )
 
-    def _record_code_use(self, code_id) -> None:
+    def _record_code_use(self, code_id, action="disarm") -> None:
         # #83/#98 follow-up: arming routes through _activate_code -> _activate_code_object,
         # which records the use and fires the logbook event. Disarming (Unsetting / alarm
         # cancelled by user) only clears the code via _clear_code, so the use was never
@@ -2089,7 +2092,7 @@ class JA80CentralUnit(object):
             return
         self._code_last_used_wall[code._id] = datetime.datetime.now(datetime.timezone.utc)
         if self._hass is not None:
-            self._fire_code_used_event(code)
+            self._fire_code_used_event(code, action)
             # disarm does not toggle code.active, so no @log_change render fires here;
             # trigger one explicitly so the code entity's last_used attribute updates.
             asyncio.get_event_loop().create_task(code.publish_updates())
@@ -2250,7 +2253,7 @@ class JA80CentralUnit(object):
             self._fault_source(source)
         elif event_type == 0x08:
             event_name = "Setting"
-            self._activate_code(source)
+            self._activate_code(source, action="arm")
             self._clear_triggers()
             self._call_zones(function_name="arming", source_id=source)
         elif event_type == 0x09:
@@ -2267,7 +2270,7 @@ class JA80CentralUnit(object):
             self._call_zones(function_name="arming", source_id=source)
         elif event_type == 0x0D:
             event_name = "Partial Set A"
-            self._activate_code(source)
+            self._activate_code(source, action="arm")
             self._call_zone(1, by=source, function_name="arming")
         elif event_type == 0x0E:
             event_name = "Lost communication with device"
@@ -2296,15 +2299,15 @@ class JA80CentralUnit(object):
             self._activate_source(source)
         elif event_type == 0x1A:
             event_name = "Setting Zone A"
-            self._activate_code(source)
+            self._activate_code(source, action="arm")
             self._call_zone(1, by=source, function_name="arming")
         elif event_type == 0x1B:
             event_name = "Setting Zone B"
-            self._activate_code(source)
+            self._activate_code(source, action="arm")
             self._call_zone(2, by=source, function_name="arming")
         elif event_type == 0x21:
             event_name = "Partial Set A,B"
-            self._activate_code(source)
+            self._activate_code(source, action="arm")
             self._call_zone(1, by=source, function_name="arming")
             self._call_zone(2, by=source, function_name="arming")
         elif event_type == 0x40:

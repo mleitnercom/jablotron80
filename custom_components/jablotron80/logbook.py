@@ -32,9 +32,19 @@ def async_describe_events(hass: HomeAssistant, async_describe_event) -> None:
             unique_id = data.get("unique_id")
             if unique_id:
                 entity_id = er.async_get(hass).async_get_entity_id("binary_sensor", DOMAIN, unique_id)
+        # #83 follow-up: distinguish what the code was used for, when the integration
+        # knows it. arm/disarm come from different event paths; other code uses
+        # (e.g. panic/tamper) carry no action and stay the plain "was used".
+        action = data.get("action")
+        if action == "arm":
+            message = "was used to arm"
+        elif action == "disarm":
+            message = "was used to disarm"
+        else:
+            message = "was used"
         return {
             LOGBOOK_ENTRY_NAME: data.get("name") or "Code",
-            LOGBOOK_ENTRY_MESSAGE: "was used",
+            LOGBOOK_ENTRY_MESSAGE: message,
             LOGBOOK_ENTRY_ENTITY_ID: entity_id,
         }
 

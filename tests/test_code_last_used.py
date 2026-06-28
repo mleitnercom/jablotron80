@@ -136,6 +136,8 @@ def test_code_use_fires_logbook_event(event_loop_for_setters):
     assert "unique_id" in data and str(CODE_ID) in data["unique_id"]
     # entity_id is carried so HA links the recorded event to the code entity.
     assert "entity_id" in data
+    # generic activation (no action passed) -> renders as plain "was used"
+    assert data.get("action") is None
 
     # Still active -> a second activation does not fire another entry.
     unit._activate_code_object(code)
@@ -172,6 +174,8 @@ def test_disarm_records_code_use_fires_event(event_loop_for_setters):
     assert "unique_id" in data and str(CODE_ID) in data["unique_id"]
     # entity_id is carried so HA links the recorded event to the code entity.
     assert "entity_id" in data
+    # disarm path labels the action so the logbook says "was used to disarm"
+    assert data["action"] == "disarm"
 
     # the use is recorded for last_used; the code stays inactive (disarm clears it).
     assert CODE_ID in unit._code_last_used_wall
@@ -195,3 +199,26 @@ def test_record_code_use_ignores_non_code(event_loop_for_setters):
 
     assert fired == []
     assert unit._code_last_used_wall == {}
+
+
+def test_arm_action_labels_event(event_loop_for_setters):
+    """The arm path passes action='arm' so the logbook can say 'was used to arm'.
+
+    Mirror of the disarm test: arm routes through _activate_code(..., action='arm')
+    -> _activate_code_object, which carries the action onto the fired event.
+    """
+    fired = []
+
+    class _Bus:
+        def async_fire(self, event_type, data):
+            fired.append((event_type, data))
+
+    unit = _build_unit()
+    unit._hass = type("_Hass", (), {"bus": _Bus()})()
+
+    code = unit.get_code(CODE_ID)
+    unit._activate_code_object(code, action="arm")
+
+    assert len(fired) == 1
+    _, data = fired[0]
+    assert data["action"] == "arm"
