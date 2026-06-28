@@ -59,3 +59,37 @@ def test_update_panel_clock_ignores_none(event_loop_for_setters):
     unit._update_panel_clock(None)
     assert unit.panel_time.value is None
     assert unit.panel_time_drift.value is None
+
+
+# --- entity-render: the clock shows a literal HH:MM, not an aging relative time ---
+import homeassistant.components.sensor as _ha_sensor  # noqa: E402
+
+if not hasattr(_ha_sensor, "SensorDeviceClass"):
+
+    class SensorDeviceClass:  # noqa: D401 - minimal stand-in
+        TIMESTAMP = "timestamp"
+        SIGNAL_STRENGTH = "signal_strength"
+
+    _ha_sensor.SensorDeviceClass = SensorDeviceClass
+
+from custom_components.jablotron80.sensor import JablotronPanelClockEntity  # noqa: E402
+
+
+def test_panel_clock_entity_renders_hh_mm(event_loop_for_setters):
+    """The clock entity shows a literal HH:MM string (no relative 'x minutes ago')."""
+    unit = _build_unit()
+    now = datetime.datetime.now()
+    panel_naive = (now + datetime.timedelta(seconds=90)).replace(second=0, microsecond=0)
+    unit._update_panel_clock(panel_naive)
+
+    ent = JablotronPanelClockEntity(unit.panel_time, unit)
+    state = ent.state
+    assert state == unit.panel_time.value.strftime("%H:%M")
+    assert len(state) == 5 and state[2] == ":"
+
+
+def test_panel_clock_entity_none_before_event(event_loop_for_setters):
+    """Before any event the entity state is None (sensor shows 'unknown')."""
+    unit = _build_unit()
+    ent = JablotronPanelClockEntity(unit.panel_time, unit)
+    assert ent.state is None

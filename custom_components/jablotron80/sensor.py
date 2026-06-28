@@ -80,17 +80,15 @@ class JablotronSignalEntity(JablotronSensorEntity):
 
 
 class JablotronPanelClockEntity(JablotronSensorEntity):
-    # #151 read-only: the panel's own clock as a timestamp sensor. None until the
-    # first event provides a reading; minute resolution, year assumed by the
-    # integration.
+    # #151 read-only: the panel's own clock, shown as a literal HH:MM time. None until
+    # the first event provides a reading; minute resolution, year assumed by the
+    # integration. Deliberately NOT a TIMESTAMP device_class: HA renders timestamp
+    # sensors relative to now ("a minute ago"), which for a clock just ages
+    # confusingly. The companion drift sensor carries the numeric offset vs HA time.
     @property
     def state(self):
         value = self._object.value
-        return value if isinstance(value, datetime.datetime) else None
-
-    @property
-    def device_class(self) -> str:
-        return SensorDeviceClass.TIMESTAMP
+        return value.strftime("%H:%M") if isinstance(value, datetime.datetime) else None
 
 
 class JablotronPanelDriftEntity(JablotronSensorEntity):
