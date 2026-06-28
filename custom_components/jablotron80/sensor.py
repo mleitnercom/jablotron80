@@ -1,5 +1,6 @@
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.const import EntityCategory
 from homeassistant.helpers.entity import Entity
 from .jablotron import (
     JA80CentralUnit,
@@ -90,6 +91,11 @@ class JablotronPanelClockEntity(JablotronSensorEntity):
         value = self._object.value
         return value.strftime("%H:%M") if isinstance(value, datetime.datetime) else None
 
+    @property
+    def entity_category(self) -> Optional[EntityCategory]:
+        # The panel clock is diagnostic context for the drift, not a primary sensor.
+        return EntityCategory.DIAGNOSTIC
+
 
 class JablotronPanelDriftEntity(JablotronSensorEntity):
     # #151 read-only: drift of the panel clock vs HA time at the last event, in
@@ -98,3 +104,7 @@ class JablotronPanelDriftEntity(JablotronSensorEntity):
     @property
     def unit_of_measurement(self) -> str:
         return "s"
+
+    @property
+    def entity_category(self) -> Optional[EntityCategory]:
+        return EntityCategory.DIAGNOSTIC
