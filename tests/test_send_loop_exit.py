@@ -94,14 +94,34 @@ def test_no_complete_prefix_sends_once_after_accept(event_loop_for_setters):
 
 
 def test_no_complete_prefix_unaccepted_keeps_full_retry_budget(event_loop_for_setters):
-    """#168 guard: when the command is never accepted, the full retry budget is
-    still spent (11 attempts). The fix only short-circuits AFTER an accept."""
+    """When the command is never accepted its full retry budget is still spent - the
+    short-circuit only applies AFTER an accept.
+
+    The budget is per command now (#219): the code-less "Details" query is the one
+    that opts into the generous budget, so it is passed explicitly here, exactly as
+    ``send_detail_command`` does.
+    """
     conn = _build_conn()
-    cmd = JablotronCommand(name="Details", code=b"\x8e", accepted_prefix=b"\xa4\xff")
+    cmd = JablotronCommand(
+        name="Details", code=b"\x8e", accepted_prefix=b"\xa4\xff", max_retries=10
+    )
 
     writes = _run_one_command(event_loop_for_setters, conn, cmd, [False])
 
     assert writes == 11  # retries 10..0 inclusive
+
+
+def test_unaccepted_code_sequence_stops_at_the_low_default(event_loop_for_setters):
+    """#219: an arm/disarm key sequence must not inherit the generous budget. The
+    panel starts a tamper alarm after 10 unsuccessful code entries in a row, so a
+    rejected code has to stop well short of that."""
+    conn = _build_conn()
+    cmd = JablotronCommand(name="key sequence *HIDDEN*", code=b"\x81", accepted_prefix=b"\xa1\xff")
+
+    writes = _run_one_command(event_loop_for_setters, conn, cmd, [False])
+
+    assert writes == 3  # the initial attempt plus the 2 default retries
+    assert writes < 10  # the panel's tamper threshold
 
 
 def test_complete_prefix_command_unchanged(event_loop_for_setters):

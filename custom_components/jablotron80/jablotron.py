@@ -661,6 +661,12 @@ class JablotronCommand:
     complete_prefix: str = None
     accepted_prefix: str = None
     max_records: int = 20
+    # Retry budget for the send loop: 2 retries = 3 attempts in total.
+    # Deliberately LOW by default. The arm/disarm key sequences carry the access
+    # code, and the panel starts a tamper (sabotage) alarm after 10 unsuccessful
+    # code entries in a row (JA-80K manual, 13.2). A rejected code must therefore
+    # never be hammered. Only the code-less "Details" query raises this budget.
+    max_retries: int = 2
 
     def __post_init__(self) -> None:
         self._event = asyncio.Event()
@@ -817,9 +823,12 @@ class JablotronConnection:
                 if send_cmd is not None:
                     accepted = False
                     confirmed = False
-                    # #153 (heifisch): more attempts so the detail query gets acked on flaky
-                    # comms; reconciliation only runs once a "Details" command is confirmed.
-                    retries = 10
+                    # Per-command retry budget (see JablotronCommand.max_retries).
+                    # The code-less "Details" query raises it so it still gets acked on
+                    # flaky links (#153). Everything carrying the access code keeps the
+                    # low default, so a rejected arm/disarm code is not re-sent into the
+                    # panel's "10 wrong entries in a row" tamper alarm.
+                    retries = send_cmd.max_retries
 
                     while retries >= 0 and not (accepted and confirmed):
                         for i in range(len(send_cmd.code)):
@@ -853,18 +862,20 @@ class JablotronConnection:
                                 else:
                                     if retries == 0:
                                         LOGGER.warning(f"no completion message found for command {send_cmd}")
-                                    send_cmd.confirm(False)
-                                    continue
+                                    # Fall through to the retry decrement below. This used to
+                                    # `continue`, which skipped the decrement and re-sent the
+                                    # sequence forever. Not academic: elevated mode
+                                    # ("*0" + master code) carries the code AND has a
+                                    # completion handshake, so an unconfirmed one hammered
+                                    # the code into the panel without any limit.
                             else:
-                                # #168: a command with no completion handshake (the
-                                # background "Details" query and the arm/disarm key
-                                # sequences) is done the moment it is accepted - there is
-                                # nothing further to wait for. Mark it confirmed so the
-                                # loop exits now instead of re-sending the same keypress(es)
-                                # for every remaining retry (which floods the bus and, for
-                                # arm/disarm, re-enters the PIN ~11x - the #168 contention).
-                                # The retry budget is untouched for the not-yet-accepted
-                                # case: there `accepted` is False, so the loop keeps trying.
+                                # No completion handshake (the "Details" query and the
+                                # arm/disarm key sequences): the command is done the moment
+                                # it is accepted - there is nothing further to wait for.
+                                # Mark it confirmed so the loop exits now instead of
+                                # re-sending the same keypresses. For arm/disarm that
+                                # re-entry matters: the master code toggles arm/disarm, so
+                                # sending it again flips the state straight back.
                                 confirmed = True
 
                             send_cmd.confirm(True)
@@ -872,6 +883,13 @@ class JablotronConnection:
                                 self.update_devices = True
 
                         retries -= 1
+
+                    if not (accepted and confirmed):
+                        # Budget exhausted without the command ever succeeding. Report the
+                        # failure, otherwise anyone awaiting wait_for_confirmation() waits
+                        # forever - read_settings() does exactly that, during startup.
+                        LOGGER.warning(f"command {send_cmd} not confirmed after all retries")
+                        send_cmd.confirm(False)
 
                     self._cmd_q.task_done()
                     self._send_cmd = None
@@ -3012,7 +3030,15 @@ class JA80CentralUnit(object):
     async def send_return_mode_command(self) -> None:
         # if self.system_status in self.STATUS_ELEVATED:
         await self._connection.add_command(
-            JablotronCommand(name="Esc / back", code=b"\x8e", accepted_prefix=b"\xa1\xff")
+            JablotronCommand(
+                name="Esc / back",
+                code=b"\x8e",
+                accepted_prefix=b"\xa1\xff",
+                # Carries no access code, so re-sending cannot trip the panel's
+                # wrong-code tamper alarm - keep the generous budget. read_settings()
+                # relies on this to leave elevated mode again.
+                max_retries=10,
+            )
         )
 
     async def send_settings_command(self) -> None:
@@ -3021,6 +3047,10 @@ class JA80CentralUnit(object):
             name="Get settings",
             code=b"\x8a",
             accepted_prefix=b"\xa1\xff",
+            # Carries no access code either, and the panel acks only about one
+            # keypress in six - with the low default this would routinely exhaust
+            # its budget unacknowledged.
+            max_retries=10,
             complete_prefix=b"\xe6\x04",
             max_records=300,
         )
@@ -3029,7 +3059,16 @@ class JA80CentralUnit(object):
 
     async def send_detail_command(self) -> None:
         await self._connection.add_command(
-            JablotronCommand(name="Details", code=b"\x8e", accepted_prefix=b"\xa4\xff")
+            JablotronCommand(
+                name="Details",
+                code=b"\x8e",
+                accepted_prefix=b"\xa4\xff",
+                # #153: a generous budget so the query still gets acked on flaky links.
+                # Safe to raise here, and only here: unlike the arm/disarm sequences this
+                # command carries no access code, so re-sending it cannot trip the panel's
+                # wrong-code tamper alarm.
+                max_retries=10,
+            )
         )
 
     async def enter_elevated_mode(self, code: str) -> bool:
